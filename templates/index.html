@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Ψηφιακός βοηθός Εθνικού Θεάτρου</title>
+    <link
+      href="https://fonts.googleapis.com/css2?family=Roboto+Slab&family=Poppins&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="icon" href="{{ url_for('static', path='img/favicon.ico') }}" />
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', path='css/chatbot.css') }}"
+    />
+  </head>
+  <body>
+    <div id="chatbot-container">
+      <div id="chatbot-header" onclick="toggleChatbot()">
+        Ψηφιακός βοηθός Εθνικού Θεάτρου
+      </div>
+      <div id="chatbot" style="display: none">
+        <div id="chatbot-body"></div>
+        <div id="chatbot-footer">
+          <input
+            type="text"
+            id="user-input"
+            placeholder="Πληκτρολογείστε το μήνυμά σας..."
+          />
+          <button id="send-button" onclick="sendMessage()" disabled>Αποστολή</button>
+        </div>
+      </div>
+    </div>
+    <script>
+      // Markdown parser; use the following lines (37-45) if you want to open links in a new tab
+      const renderer = new marked.Renderer();
+      renderer.link = function (href, title, text) {
+        const linkHtml = marked.Renderer.prototype.link.call(this, href, title, text);
+        // Add the 'target="_blank"' attribute to make links open in a new tab
+        return linkHtml.replace('<a', '<a target="_blank" rel="noopener noreferrer"');
+      };
+      marked.setOptions({
+        renderer: renderer
+      });
+      const sendButton = document.getElementById("send-button");
+
+      function reopenWSConnection() {
+        setTimeout(() => {
+          displaySystemMessage("Προσπαθώ να επανασυνδεθώ...");
+          connectWebSocket();
+        }, 5000); // Attempt to reconnect after 5 seconds
+      }
+
+      function displaySystemMessage(message) {
+        const chatBody = document.getElementById("chatbot-body");
+        chatBody.innerHTML += `<div class="chat-message bot"><span>Assistant:</span> <div class="message-content">${message}</div></div>`;
+        scrollToBottomOfResults();
+      }
+
+      let ws;
+      function connectWebSocket() {
+        console.log('connectWebSocket');
+        ws = new WebSocket('ws://0.0.0.0:9500/chatstream');
+
+        // Handle WebSocket open event
+        ws.addEventListener('open', (event) => {
+          console.log('WebSocket connection opened:', event);
+          // Enable send button when WebSocket is connected
+          sendButton.disabled = false;
+        });
+
+        // Handle WebSocket message event
+        ws.addEventListener('message', handleMessage);
+
+        // Handle WebSocket close event
+        ws.addEventListener('close', (event) => {
+          console.warn('WebSocket closed:', event);
+          sendButton.disabled = true;
+          displaySystemMessage("Η σύνδεση με τον διακομιστή έχει χαθεί. Προσπαθώ να επανασυνδεθώ...");
+          reopenWSConnection();
+        });
+
+        // Handle WebSocket error event
+        ws.addEventListener('error', (event) => {
+          console.error('WebSocket error:', event);
+        });
+      }
+
+      connectWebSocket();  // Initial connection setup
+
+      // Initialize these two variables:
+      let create_new_response = true;
+      let receivedData = ''; // for streaming data
+      function handleMessage(event) {
+        let data = event.data;
+        
+        if (data === "Ο ψηφιακός βοηθός είναι στη μέγιστη χωρητικότητα, παρακαλώ δοκιμάστε αργότερα.") {
+          displaySystemMessage(data);
+          reopenWSConnection();
+          if (document.querySelector('.loading')){
+            document.querySelector('.loading').remove();
+          }
+          return;
+        }
+
+        if (create_new_response) {
+          create_new_response = false;
+          const chatBody = document.getElementById("chatbot-body");
+          chatBody.innerHTML += `<div class="chat-message bot"><span>Assistant:</span> <div class="message-content"></div></div>`;
+          if (document.querySelector('.loading')){
+            document.querySelector('.loading').remove();
+          }
+        }
+         // scroll to bottom every 300ms
+         setTimeout(() => {
+          scrollToBottomOfResults();
+        }, 300);
+
+        let chat_content = document.querySelectorAll('.message-content');
+        let message_content = chat_content[chat_content.length - 1];
+        if (data.trim() != "[END]"){
+          receivedData += data; // Append the received data
+        }
+        message_content.innerHTML = marked.parse(receivedData);
+      }
+
+      function processNewlines(text) {
+        return text.replace(/\n/g, "<br>");
+      }
+
+      chatArea = document.querySelector("#chatbot-body");
+      function scrollToBottomOfResults() {
+        chatArea.scrollTop = chatArea.scrollHeight;
+      }
+
+      function toggleChatbot() {
+        const container = document.getElementById("chatbot-container");
+        const chatbot_id = document.getElementById("chatbot");
+        console.log(container.style.display);
+
+        if (chatbot_id.style.display === "flex") {
+          chatbot_id.style.display = "none";
+        } else {
+          chatbot_id.style.display = "flex";
+        }
+      }
+
+      function sendMessage() {
+        const inputField = document.getElementById("user-input");
+        const userQuery = inputField.value;
+        const chatBody = document.getElementById("chatbot-body");
+
+        // Display user's message
+        const formattedUserQuery = processNewlines(userQuery);
+        chatBody.innerHTML += `<div class="chat-message user"><span>Χρήστης:</span> <div class="message-content">${formattedUserQuery}</div></div>`;
+        inputField.value = "";
+
+        chatBody.innerHTML += `<div class="loading"><span class="loading-dot"></span><span class="loading-dot"></span><span class="loading-dot"></span></div>`;
+        scrollToBottomOfResults();
+        // Send the user query as JSON to the server via WebSocket
+        receivedData = '';
+        create_new_response = true;
+        ws.send(JSON.stringify({ query: userQuery }));
+      }
+      // Enter key to send, Shift+Enter for a new line
+      document
+        .getElementById("user-input")
+        .addEventListener("keydown", function (event) {
+          if (event.key === "Enter" && !event.shiftKey && !sendButton.disabled) {
+            event.preventDefault();
+            sendMessage();
+          }
+        });
+    </script>
+  </body>
+</html>
